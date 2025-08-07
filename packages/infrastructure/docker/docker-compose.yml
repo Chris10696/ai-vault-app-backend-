@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  api_gateway:
+    build:
+      context: ../../backend # Two levels up from infrastructure/docker -> ai-vault/
+      dockerfile: Dockerfile
+    container_name: ai-vault-backend
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn packages.backend.services.api_gateway.main:app --host 0.0.0.0 --port 8000 --reload"
+    env_file:
+      - ../../backend/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_vault
+      - REDIS_URL=redis://redis:6379
+      - RATE_LIMIT_REDIS_URL=redis://redis:6379
+      - ALLOWED_ORIGINS=http://localhost:3000
+    volumes:
+      - ../../backend:/app/packages/backend:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai-vault-postgres
+    environment:
+      POSTGRES_DB: ai_vault
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../scripts/setup:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_vault"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-vault-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  supabase_studio:
+    image: supabase/studio:latest
+    container_name: supabase-studio
+    depends_on:
+      - postgres
+    environment:
+      STUDIO_PG_META_PORT: 5432
+      SUPABASE_DB_HOST: postgres
+      SUPABASE_DB_PORT: 5432
+      SUPABASE_DB_NAME: ai_vault
+      SUPABASE_DB_USER: postgres
+      SUPABASE_DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
+  smtp:
+    image: mailhog/mailhog:latest
+    container_name: ai-vault-mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

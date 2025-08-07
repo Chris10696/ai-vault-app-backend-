@@ -1,0 +1,167 @@
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      postgres:
+        image: supabase/postgres:15.1.0.147
+        ports:
+          - 54322:5432
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov bandit safety
+    
+    - name: Static Security Analysis with Bandit
+      run: |
+        bandit -r packages/backend -f json -o bandit-report.json
+        bandit -r packages/backend -ll
+    
+    - name: Dependency Security Check
+      run: |
+        safety check --json --output safety-report.json
+    
+    - name: Run Unit Tests with Coverage
+      env:
+        JWT_SECRET: test-secret-key-for-ci-only
+        REDIS_URL: redis://localhost:6379
+        SUPABASE_URL: http://localhost:54322
+        SUPABASE_ANON_KEY: test-key
+      run: |
+        pytest packages/backend/tests/unit/ --cov=packages/backend/core --cov-report=xml --cov-report=html
+    
+    - name: Start API Gateway
+      env:
+        JWT_SECRET: test-secret-key-for-ci-only
+        REDIS_URL: redis://localhost:6379
+        SUPABASE_URL: http://localhost:54322
+        SUPABASE_ANON_KEY: test-key
+      run: |
+        cd packages/backend/services/api_gateway
+        python main.py &
+        sleep 10  # Wait for server to start
+        curl -f http://localhost:8000/health || exit 1
+    
+    - name: Download and Start OWASP ZAP
+      run: |
+        wget -q https://github.com/zaproxy/zaproxy/releases/download/v2.14.0/ZAP_2_14_0_unix.sh
+        chmod +x ZAP_2_14_0_unix.sh
+        sudo ./ZAP_2_14_0_unix.sh -q
+        /opt/zaproxy/zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true &
+        sleep 30  # Wait for ZAP to start
+    
+    - name: Run OWASP ZAP Security Scan
+      run: |
+        python tools/security/zap_security_scan.py --target http://localhost:8000 --output zap-results.json --fail-on-high
+    
+    - name: Upload Security Reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+          zap-results.json
+          scan_report.html
+          htmlcov/
+    
+    - name: Comment PR with Security Summary
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let comment = '## 🔒 Security Scan Results\n\n';
+          
+          // Add Bandit results
+          try {
+            const banditData = JSON.parse(fs.readFileSync('bandit-report.json', 'utf8'));
+            const highIssues = banditData.results.filter(r => r.issue_severity === 'HIGH').length;
+            const mediumIssues = banditData.results.filter(r => r.issue_severity === 'MEDIUM').length;
+            
+            comment += `### Static Analysis (Bandit)\n`;
+            comment += `- High Severity: ${highIssues}\n`;
+            comment += `- Medium Severity: ${mediumIssues}\n\n`;
+          } catch (e) {
+            comment += '### Static Analysis: ❌ Failed to parse results\n\n';
+          }
+          
+          // Add ZAP results
+          try {
+            const zapData = JSON.parse(fs.readFileSync('zap-results.json', 'utf8'));
+            const summary = zapData.summary.risk_breakdown;
+            
+            comment += `### Dynamic Analysis (OWASP ZAP)\n`;
+            comment += `- High Risk: ${summary.High}\n`;
+            comment += `- Medium Risk: ${summary.Medium}\n`;
+            comment += `- Low Risk: ${summary.Low}\n\n`;
+            
+            if (summary.High > 0) {
+              comment += '⚠️ **High-risk vulnerabilities found! Please review before merging.**\n\n';
+            } else {
+              comment += '✅ **No high-risk vulnerabilities found.**\n\n';
+            }
+          } catch (e) {
+            comment += '### Dynamic Analysis: ❌ Failed to parse results\n\n';
+          }
+          
+          comment += 'Full reports are available in the workflow artifacts.';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  integration-tests:
+    needs: security-tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Integration Tests
+      run: |
+        echo "Integration tests would run here"
+        # pytest packages/backend/tests/integration/

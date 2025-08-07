@@ -1,0 +1,61 @@
+# AI Vault Module B: Differential Privacy Engine
+# Complete dependency list for production deployment
+
+# Core FastAPI dependencies (from Module A)
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Authentication & Security (from Module A)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Database & Storage (from Module A)
+supabase==2.0.1
+psycopg2-binary==2.9.9
+
+# Caching & Rate Limiting (from Module A)
+redis==5.0.1
+fastapi-limiter==0.1.6
+
+# Module B: Core Privacy & Cryptography
+cryptography==41.0.7
+numpy==1.24.4
+scipy==1.11.4
+pandas==2.1.4
+
+# Module B: Data Analysis & Visualization
+scikit-learn==1.3.2
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# Module B: Async & Communication
+asyncio-mqtt==0.16.1
+
+# Security Testing (from Module A + Module B)
+python-owasp-zap-v2.4==0.0.21
+bandit==1.7.5
+safety==2.3.4
+
+# Development & Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-asyncio==0.21.1
+pytest-benchmark==4.0.0
+hypothesis==6.92.1
+
+# Code Quality
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+
+# System Monitoring
+psutil==5.9.6
+
+# Environment Management
+python-dotenv==1.0.0
+
+# Utilities
+pydantic==2.5.0
+httpx==0.25.2
+structlog==23.2.0
