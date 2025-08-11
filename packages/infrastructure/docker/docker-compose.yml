@@ -1,62 +1,79 @@
 version: '3.8'
 
 services:
-  ai-vault-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-    container_name: ai-vault-backend
+  # Supabase (PostgreSQL)
+  db:
+    image: postgres:15
     environment:
-      - ENVIRONMENT=development
-      - LOG_LEVEL=INFO
-      - SEAL_CONFIG_PATH=/app/seal_configs
-      - KEY_STORE_PATH=/app/keys
-      - HE_MODEL_STORE=/app/models
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://aiault:secure_password@postgres:5432/aiault_db
+      POSTGRES_DB: aivault
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      - "8000:8000"
-    volumes:
-      - ./logs:/app/logs
-      - ./data/keys:/app/keys
-      - ./data/models:/app/models
-      - ./data/cache:/app/cache
-    depends_on:
-      - postgres
-      - redis
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: ai-vault-postgres
-    environment:
-      - POSTGRES_DB=aiault_db
-      - POSTGRES_USER=aiault
-      - POSTGRES_PASSWORD=secure_password
-    ports:
-      - "5432:5432"
+      - "54322:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    restart: unless-stopped
+      - ./packages/backend/core/database/recommendation_schema.sql:/docker-entrypoint-initdb.d/001-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
+  # Redis for caching and sessions
   redis:
     image: redis:7-alpine
-    container_name: ai-vault-redis
     ports:
       - "6379:6379"
+    command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Neural Discovery Engine Backend
+  recommendation-engine:
+    build:
+      context: ./packages/backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/aivault
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET_KEY=your-super-secret-key-change-in-production
+      - ENVIRONMENT=development
+      - LOG_LEVEL=info
+    volumes:
+      - ./packages/backend:/app
+      - model_storage:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+
+  # Frontend (Next.js) - for integration testing
+  frontend:
+    build:
+      context: ./packages/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8001
+    depends_on:
+      - recommendation-engine
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
+  model_storage:
+
+networks:
+  default:
+    name: aivault-network
